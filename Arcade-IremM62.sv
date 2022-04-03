@@ -19,6 +19,9 @@
 //  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 //============================================================================
 
+//LLAPI NOTE: 
+// llapi.sv needs to be in rtl folder and needs to be declared in file.qip (set_global_assignment -name SYSTEMVERILOG_FILE rtl/llapi.sv)
+
 module emu
 (
 	//Master input clock
@@ -179,11 +182,21 @@ assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 
 assign VGA_F1    = 0;
 assign VGA_SCALER= 0;
-assign USER_OUT  = '1;
+
+//LLAPI
+//Done later from the LLAPI main block as USER_OUT is now an option with LLAPI available
+//assign USER_OUT  = '1;
+//END
+
 assign LED_USER  = ioctl_download;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
-assign BUTTONS   = 0;
+
+//LLAPI
+//Remap OSD buttons to LLAPI specifc combinaison (see LLAPI main block)
+assign BUTTONS   = llapi_osd;
+//END
+
 assign AUDIO_MIX = 0;
 assign HDMI_FREEZE = 0;
 assign FB_FORCE_BLANK = 0;
@@ -206,6 +219,17 @@ localparam CONF_STR = {
 	"P1,Pause options;",
 	"P1OP,Pause when OSD is open,On,Off;",
 	"P1OQ,Dim video after 10s,On,Off;",
+	
+	//LLAPI
+	//Add LLAPI option to the OSD menu
+	//Need to reserve 1 bit :  "OM" = status[22] as there are 2 options (None, LLAPI) 
+	//To detect LLAPI status[22] should be TRUE
+	//None      : 00
+	//LLAPI     : 01
+	//Always double check witht the bits map allocation table to avoid conflicts	"-;",
+	"OM,Serial Mode,Off,LLAPI;",
+	//END
+	
 	"-;",
 	"DIP;",
 	"-;",
@@ -281,8 +305,12 @@ wire [24:0] ioctl_addr;
 wire  [7:0] ioctl_dout;
 wire  [7:0] ioctl_din;
 
-wire [15:0] joy1 = joy1a;
-wire [15:0] joy2 = joy2a;
+//LLAPI
+//removed default allocation as we now have 2 options USB and LLAPI
+wire [15:0] joy1; //= joy1a;
+wire [15:0] joy2; //= joy2a;
+//END
+
 wire [15:0] joy1a;
 wire [15:0] joy2a;
 
@@ -313,6 +341,138 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.joystick_1(joy2a)
 
 );
+
+//////////////////   LLAPI   ///////////////////
+
+reg llapi_button_pressed, llapi_button_pressed2;
+
+//Initialise BliSTer port 1 and port 2 based on first button pressed
+always @(posedge CLK_50M) begin
+        if (reset) begin
+                llapi_button_pressed  <= 0;
+                llapi_button_pressed2 <= 0;
+        end else begin
+                if (|llapi_buttons)
+                        llapi_button_pressed  <= 1;
+                if (|llapi_buttons2)
+                        llapi_button_pressed2 <= 1;
+        end
+end
+
+// controller id is 0 if there is either an Atari controller or no controller
+// if id is 0, assume there is no controller until a button is pressed
+// also check for 255 and treat that as 'no controller' as well
+wire use_llapi  = llapi_en  && llapi_select && ((|llapi_type  && ~(&llapi_type))  || llapi_button_pressed);
+wire use_llapi2 = llapi_en2 && llapi_select && ((|llapi_type2 && ~(&llapi_type2)) || llapi_button_pressed2);
+
+wire [31:0] llapi_buttons, llapi_buttons2;
+wire [71:0] llapi_analog, llapi_analog2;
+wire [7:0]  llapi_type, llapi_type2;
+wire llapi_en, llapi_en2;
+
+wire llapi_select = status[22]; // This is the status bit from the Menu (see Menu configuration block to check what bits need to be tested)
+
+wire llapi_latch_o, llapi_latch_o2, llapi_data_o, llapi_data_o2;
+
+//connect the pins of USER I/O port from the I/O board to BliSTer (if LLAPI has been selected in the OSD menu)
+
+// Indexes for reference:
+// 0 = D+    = P1 Latch
+// 1 = D-    = P1 Data
+// 2 = TX-   = LLAPI Enable
+// 3 = GND_d = N/C
+// 4 = RX+   = P2 Latch
+// 5 = RX-   = P2 Data
+
+always_comb begin
+	USER_OUT = 6'b111111;
+	//LLAPI selected in OSD menu
+	if (llapi_select) begin
+		USER_OUT[0] = llapi_latch_o;
+		USER_OUT[1] = llapi_data_o;
+		USER_OUT[2] = ~(llapi_select & ~OSD_STATUS); //This is the Red or Green LED on the BliSter
+		USER_OUT[4] = llapi_latch_o2;
+		USER_OUT[5] = llapi_data_o2;
+	end else begin
+		USER_OUT[0] = 1'b1;
+		USER_OUT[1] = 1'b1;
+	end
+end
+
+//LLAPI string configuration for port 1
+LLAPI llapi
+(
+	.CLK_50M(CLK_50M),
+	.LLAPI_SYNC(video_vs),
+	.IO_LATCH_IN(USER_IN[0]),
+	.IO_LATCH_OUT(llapi_latch_o),
+	.IO_DATA_IN(USER_IN[1]),
+	.IO_DATA_OUT(llapi_data_o),
+	.ENABLE(llapi_select & ~OSD_STATUS),
+	.LLAPI_BUTTONS(llapi_buttons),
+	.LLAPI_ANALOG(llapi_analog),
+	.LLAPI_TYPE(llapi_type),
+	.LLAPI_EN(llapi_en)
+);
+
+//LLAPI string configuration for port 2
+LLAPI llapi2
+(
+	.CLK_50M(CLK_50M),
+	.LLAPI_SYNC(video_vs),
+	.IO_LATCH_IN(USER_IN[4]),
+	.IO_LATCH_OUT(llapi_latch_o2),
+	.IO_DATA_IN(USER_IN[5]),
+	.IO_DATA_OUT(llapi_data_o2),
+	.ENABLE(llapi_select & ~OSD_STATUS),
+	.LLAPI_BUTTONS(llapi_buttons2),
+	.LLAPI_ANALOG(llapi_analog2),
+	.LLAPI_TYPE(llapi_type2),
+	.LLAPI_EN(llapi_en2)
+);
+
+
+// Controller string provided by core for reference (order is important)
+//Controller specific mapping based on type. More info here : https://docs.google.com/document/d/12XpxrmKYx_jgfEPyw-O2zex1kTQZZ-NSBdLO2RQPRzM/edit
+//To be checked : button ref id are HID button id ?
+
+//Mapping :  	"J1,Dig Left,Dig Right,Start 1P,Start 2P,Coin,Pause;",
+
+//P1
+wire [15:0] joy_ll_a = { 8'd0,												   // Pause
+	llapi_buttons[4],  llapi_buttons[6],  llapi_buttons[5],  llapi_buttons[1], llapi_buttons[0], // Coin Start-2P Start-1P Dig right Dig Left
+	llapi_buttons[27], llapi_buttons[26], llapi_buttons[25], llapi_buttons[24] // d-pad
+};
+
+//P2
+wire [15:0] joy_ll_b = { 8'd0,												   // Pause
+	llapi_buttons2[4],  llapi_buttons2[6],  llapi_buttons2[5],  llapi_buttons2[1], llapi_buttons2[0], // Coin Start-2P Start-1P Dig right Dig Left
+	llapi_buttons2[27], llapi_buttons2[26], llapi_buttons2[25], llapi_buttons2[24] // d-pad
+};
+
+//Assign (DOWN + START + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P1 ports
+wire llapi_osd = (llapi_buttons[26] & llapi_buttons[5] & llapi_buttons[0]) || (llapi_buttons2[26] & llapi_buttons2[5] & llapi_buttons2[0]);
+
+
+//It looks this part is a little bit core specifc. Need to check if that could not be standardized
+// if LLAPI is enabled, shift USB controllers over to the next available player slot
+// This basically connect the console ports to the USB joysticks or to the to LLAPI ones (that have been created above)
+
+always_comb begin
+        if (use_llapi & use_llapi2) begin
+                joy1 = joy_ll_a;
+                joy2 = joy_ll_b;
+        end else if (use_llapi ^ use_llapi2) begin
+                joy1 = use_llapi  ? joy_ll_a : joy1a;
+                joy2 = use_llapi2 ? joy_ll_b : joy1a;
+        end else begin
+                joy1 = joy1a;
+                joy2 = joy2a;
+        end
+end
+
+////////////////////////////////////////     END OF LLAPI MAIN BLOCK   ///////////////////////////////////////////////////////////
+
 
 assign rom_download = ioctl_download & !ioctl_index;
 
