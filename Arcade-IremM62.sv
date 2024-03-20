@@ -210,6 +210,12 @@ assign VIDEO_ARY = (!ar) ? ((status[2] | landscape) ? 8'd3 : 8'd4) : 12'd0;
 `include "build_id.v" 
 localparam CONF_STR = {
 	"A.IREMM62;;",
+	//LLAPI: OSD menu item
+	//LLAPI Always ON
+	"-,<< LLAPI enabled >>;",
+	"-,<< Use USER I/O port >>;",
+	"-;",
+	//END LLAPI	
 	"OGJ,CRT H adjust,0,+1,+2,+3,+4,+5,+6,+7,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"OKN,CRT V adjust,0,+1,+2,+3,+4,+5,+6,+7,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"H0OEF,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
@@ -220,17 +226,6 @@ localparam CONF_STR = {
 	"P1,Pause options;",
 	"P1OP,Pause when OSD is open,On,Off;",
 	"P1OQ,Dim video after 10s,On,Off;",
-	
-	//LLAPI
-	//Add LLAPI option to the OSD menu
-	//Need to reserve 1 bit :  "OM" = status[22] as there are 2 options (None, LLAPI) 
-	//To detect LLAPI status[22] should be TRUE
-	//None      : 00
-	//LLAPI     : 01
-	//Always double check witht the bits map allocation table to avoid conflicts	"-;",
-	"OM,Serial Mode,Off,LLAPI;",
-	//END
-	
 	"-;",
 	"DIP;",
 	"-;",
@@ -373,7 +368,7 @@ wire [71:0] llapi_analog, llapi_analog2;
 wire [7:0]  llapi_type, llapi_type2;
 wire llapi_en, llapi_en2;
 
-wire llapi_select = status[22]; // This is the status bit from the Menu (see Menu configuration block to check what bits need to be tested)
+wire llapi_select = 1'b1;
 
 wire llapi_latch_o, llapi_latch_o2, llapi_data_o, llapi_data_o2;
 
@@ -453,13 +448,11 @@ wire [15:0] joy_ll_b = { 8'd0,												   // Pause
 	llapi_buttons2[27], llapi_buttons2[26], llapi_buttons2[25], llapi_buttons2[24] // d-pad
 };
 
-//Assign (DOWN + START + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P1 ports
+//Assign (DOWN + START + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P2 ports
 wire llapi_osd = (llapi_buttons[26] & llapi_buttons[5] & llapi_buttons[0]) || (llapi_buttons2[26] & llapi_buttons2[5] & llapi_buttons2[0]);
 
 
-//It looks this part is a little bit core specifc. Need to check if that could not be standardized
 // if LLAPI is enabled, shift USB controllers over to the next available player slot
-// This basically connect the console ports to the USB joysticks or to the to LLAPI ones (that have been created above)
 
 always_comb begin
         if (use_llapi & use_llapi2) begin
